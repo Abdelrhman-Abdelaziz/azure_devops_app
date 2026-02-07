@@ -20,7 +20,7 @@ class _ChooseProjectsController {
 
   Future<void> init() async {
     final org = storage.getOrganization();
-    if (org.isEmpty) {
+    if (org.isEmpty && !api.isOnPrem) {
       await _chooseOrg();
     }
 

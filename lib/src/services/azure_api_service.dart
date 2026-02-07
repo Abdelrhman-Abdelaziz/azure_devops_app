@@ -73,6 +73,8 @@ abstract class AzureApiService {
 
   String get basePath;
 
+  bool get isOnPrem;
+
   List<GraphUser> get allUsers;
 
   /// Work item types for each project
@@ -381,6 +383,10 @@ abstract class AzureApiService {
   });
 
   Future<ApiResponse<List<UserTenant>>> getDirectories();
+
+  Future<void> setOnPremConfig({required bool isOnPrem, required String serverUrl, required String apiVersion});
+
+  void loadOnPremConfig();
 }
 
 class AzureApiServiceImpl with AppLogger implements AzureApiService {
@@ -408,11 +414,22 @@ class AzureApiServiceImpl with AppLogger implements AzureApiService {
 
   @override
   String get basePath => _basePath;
-  String get _basePath => 'https://dev.azure.com/$_organization';
+  String get _basePath => _isOnPrem
+      ? _serverUrl
+      : 'https://dev.azure.com/$_organization';
 
-  String get _usersBasePath => 'https://vssps.dev.azure.com';
+  String get _usersBasePath => _isOnPrem
+      ? _serverUrl
+      : 'https://vssps.dev.azure.com';
 
-  String get _apiVersion => 'api-version=7.0';
+  String get _apiVersion => 'api-version=$_selectedApiVersion';
+
+  @override
+  bool get isOnPrem => _isOnPrem;
+  bool _isOnPrem = false;
+
+  String _serverUrl = '';
+  String _selectedApiVersion = '7.0';
 
   @override
   List<GraphUser> get allUsers => _allUsers;
@@ -609,6 +626,9 @@ class AzureApiServiceImpl with AppLogger implements AzureApiService {
   }
 
   Future<Response> _checkExpiredToken(Response res, Future<Response> Function() req) async {
+    // On-prem uses PAT only, no JWT token refresh needed
+    if (_isOnPrem) return res;
+
     if (_isJwt && [203, 302].contains(res.statusCode)) {
       final tenantId = storage.getTenantId();
       // refresh expired token
@@ -627,18 +647,68 @@ class AzureApiServiceImpl with AppLogger implements AzureApiService {
   Future<LoginStatus> login(String accessToken) async {
     if (accessToken.isEmpty) return LoginStatus.unauthorized;
 
+    // Load on-prem config from storage
+    loadOnPremConfig();
+
     _isJwt = accessToken.startsWith('ey') && accessToken.split('.').length == 3;
 
     final oldToken = _accessToken;
 
     _accessToken = accessToken;
 
-    if (_isJwt) {
+    if (_isJwt && !_isOnPrem) {
       final tenantId = storage.getTenantId();
       final newToken = await MsalService().loginSilently(
         authority: tenantId.isEmpty ? null : 'https://login.microsoftonline.com/$tenantId',
       );
       if (newToken != null) _accessToken = newToken;
+    }
+
+    if (_isOnPrem) {
+      // For on-prem, validate connection using the connection data endpoint
+      final connectionEndpoint = '$_basePath/_apis/connectionData?$_apiVersion-preview';
+      final connectionRes = await _get(connectionEndpoint);
+
+      if ([HttpStatus.unauthorized, HttpStatus.nonAuthoritativeInformation].contains(connectionRes.statusCode)) {
+        _accessToken = oldToken;
+        return LoginStatus.unauthorized;
+      }
+
+      if (connectionRes.isError) {
+        _accessToken = oldToken;
+        return LoginStatus.failed;
+      }
+
+      storage.setToken(accessToken);
+
+      // Parse user info from connectionData
+      final connectionData = jsonDecode(connectionRes.body) as Map<String, dynamic>;
+      final authenticatedUser = connectionData['authenticatedUser'] as Map<String, dynamic>?;
+      _user = UserMe(
+        displayName: (authenticatedUser?['providerDisplayName'] as String?) ?? 'On-Prem User',
+        publicAlias: (authenticatedUser?['id'] as String?) ?? '',
+        emailAddress: (authenticatedUser?['providerDisplayName'] as String?) ?? '',
+        coreRevision: 0,
+        timeStamp: DateTime.now(),
+        id: (authenticatedUser?['id'] as String?) ?? '',
+        revision: 0,
+      );
+
+      // Set organization from server URL for storage/filter key purposes
+      final uri = Uri.tryParse(_serverUrl);
+      final orgKey = uri?.pathSegments.isNotEmpty == true ? uri!.pathSegments.last : 'onprem';
+      _organization = orgKey;
+      storage.setOrganization(_organization);
+
+      unawaited(_getUsers());
+
+      _chosenProjects = storage.getChosenProjects();
+
+      if (_chosenProjects!.isEmpty) {
+        return LoginStatus.projectsNotSet;
+      }
+
+      return LoginStatus.ok;
     }
 
     var profileEndpoint = '$_usersBasePath/_apis/profile/profiles/me?$_apiVersion-preview';
@@ -706,6 +776,10 @@ class AzureApiServiceImpl with AppLogger implements AzureApiService {
 
   @override
   Future<ApiResponse<List<Organization>>> getOrganizations() async {
+    if (_isOnPrem) {
+      return ApiResponse.error(Response('Not available for on-premises servers', 400));
+    }
+
     final orgsRes = await _get(
       'https://app.vssps.visualstudio.com/_apis/accounts?memberId=${user!.publicAlias}&$_apiVersion',
     );
@@ -1446,7 +1520,7 @@ class AzureApiServiceImpl with AppLogger implements AzureApiService {
     Set<GraphUser>? reviewers,
   }) async {
     final creatorsFilter = <String>[''];
-    if (creators != null) {
+    if (creators != null && !_isOnPrem) {
       for (final creator in creators) {
         final creatorSearch = "&\$filter=name eq '${creator.mailAddress}'";
         final entitlementRes = await _get(
@@ -1892,8 +1966,9 @@ class AzureApiServiceImpl with AppLogger implements AzureApiService {
     required int id,
     required Reviewer reviewer,
   }) async {
+    final identityBase = _isOnPrem ? '$_basePath' : '$_usersBasePath/$_organization';
     final identity = await _get(
-      '$_usersBasePath/$_organization/_apis/identities?searchFilter=General&filterValue=${user!.emailAddress}&$_apiVersion',
+      '$identityBase/_apis/identities?searchFilter=General&filterValue=${user!.emailAddress}&$_apiVersion',
     );
     if (identity.isError) return ApiResponse.error(null);
 
@@ -1925,8 +2000,9 @@ class AzureApiServiceImpl with AppLogger implements AzureApiService {
     final isSettingAutocomplete = autocomplete != null && autocomplete;
 
     if (isSettingAutocomplete) {
+      final identityBase = _isOnPrem ? '$_basePath' : '$_usersBasePath/$_organization';
       final identity = await _get(
-        '$_usersBasePath/$_organization/_apis/identities?searchFilter=General&filterValue=${user!.emailAddress}&$_apiVersion',
+        '$identityBase/_apis/identities?searchFilter=General&filterValue=${user!.emailAddress}&$_apiVersion',
       );
       if (identity.isError) return ApiResponse.error(null);
 
@@ -2485,8 +2561,9 @@ class AzureApiServiceImpl with AppLogger implements AzureApiService {
 
   @override
   Future<ApiResponse<String>> getUserToMention({required String email}) async {
+    final identityBase = _isOnPrem ? '$_basePath' : '$_usersBasePath/$_organization';
     final identity = await _get(
-      '$_usersBasePath/$_organization/_apis/identities?searchFilter=General&filterValue=$email&$_apiVersion',
+      '$identityBase/_apis/identities?searchFilter=General&filterValue=$email&$_apiVersion',
     );
     if (identity.isError) return ApiResponse.error(null);
 
@@ -2494,6 +2571,24 @@ class AzureApiServiceImpl with AppLogger implements AzureApiService {
   }
 
   Future<ApiResponse<List<GraphUser>>> _getUsers() async {
+    if (_isOnPrem) {
+      // On-prem uses the Graph API at the base path
+      final usersRes = await _get(
+        '$_basePath/_apis/graph/users?subjectTypes=aad,msa&$_apiVersion-preview',
+      );
+      if (usersRes.isError) {
+        // Fallback: try without subjectTypes filter for older on-prem versions
+        final fallbackRes = await _get('$_basePath/_apis/graph/users?$_apiVersion-preview');
+        if (fallbackRes.isError) return ApiResponse.error(fallbackRes);
+
+        _allUsers = GetUsersResponse.fromResponse(fallbackRes);
+        return ApiResponse.ok(_allUsers);
+      }
+
+      _allUsers = GetUsersResponse.fromResponse(usersRes);
+      return ApiResponse.ok(_allUsers);
+    }
+
     final usersRes = await _get(
       '$_usersBasePath/$_organization/_apis/graph/users?subjectTypes=aad,msa&$_apiVersion-preview',
     );
@@ -2510,11 +2605,36 @@ class AzureApiServiceImpl with AppLogger implements AzureApiService {
     _chosenProjects = null;
     _allUsers.clear();
     _user = null;
+    _isOnPrem = false;
+    _serverUrl = '';
+    _selectedApiVersion = '7.0';
     dispose();
   }
 
   @override
+  Future<void> setOnPremConfig({required bool isOnPrem, required String serverUrl, required String apiVersion}) async {
+    _isOnPrem = isOnPrem;
+    _serverUrl = serverUrl.endsWith('/') ? serverUrl.substring(0, serverUrl.length - 1) : serverUrl;
+    _selectedApiVersion = apiVersion;
+
+    storage.setIsOnPrem(isOnPrem: isOnPrem);
+    storage.setServerUrl(_serverUrl);
+    storage.setApiVersion(apiVersion);
+  }
+
+  @override
+  void loadOnPremConfig() {
+    _isOnPrem = storage.getIsOnPrem();
+    _serverUrl = storage.getServerUrl();
+    _selectedApiVersion = storage.getApiVersion();
+  }
+
+  @override
   Future<ApiResponse<List<UserTenant>>> getDirectories() async {
+    if (_isOnPrem) {
+      return ApiResponse.error(Response('Not available for on-premises servers', 400));
+    }
+
     final directoriesRes = await _post(
       '$_basePath/_apis/Contribution/HierarchyQuery?$_apiVersion-preview',
       body: {

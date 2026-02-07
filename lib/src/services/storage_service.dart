@@ -48,6 +48,15 @@ abstract class StorageService {
 
   String getTenantId();
   void setTenantId(String id);
+
+  bool getIsOnPrem();
+  void setIsOnPrem({required bool isOnPrem});
+
+  String getServerUrl();
+  void setServerUrl(String url);
+
+  String getApiVersion();
+  void setApiVersion(String version);
 }
 
 class StorageServiceCore implements StorageService {
@@ -89,6 +98,36 @@ class StorageServiceCore implements StorageService {
   @override
   void setTenantId(String id) {
     _helper.setString(_Keys.tenantId, id);
+  }
+
+  @override
+  bool getIsOnPrem() {
+    return _helper.getBool(_Keys.isOnPrem) ?? false;
+  }
+
+  @override
+  void setIsOnPrem({required bool isOnPrem}) {
+    _helper.setBool(_Keys.isOnPrem, value: isOnPrem);
+  }
+
+  @override
+  String getServerUrl() {
+    return _helper.getString(_Keys.serverUrl) ?? '';
+  }
+
+  @override
+  void setServerUrl(String url) {
+    _helper.setString(_Keys.serverUrl, url);
+  }
+
+  @override
+  String getApiVersion() {
+    return _helper.getString(_Keys.apiVersion) ?? '7.0';
+  }
+
+  @override
+  void setApiVersion(String version) {
+    _helper.setString(_Keys.apiVersion, version);
   }
 
   @override
@@ -146,7 +185,7 @@ class StorageServiceCore implements StorageService {
     final keys = _helper.getKeys();
 
     for (final k in keys) {
-      if ([_Keys.token, _Keys.theme, _Keys.filters].contains(k)) continue;
+      if ([_Keys.token, _Keys.theme, _Keys.filters, _Keys.isOnPrem, _Keys.serverUrl, _Keys.apiVersion].contains(k)) continue;
 
       _helper.remove(k);
     }
@@ -364,6 +403,9 @@ class _Keys {
   static const filters = 'filters';
   static const shortcuts = 'shortcuts';
   static const hasSeenSubscriptionAddedBottomsheet = 'hasSeenSubscriptionAddedBottomsheet';
+  static const isOnPrem = 'isOnPrem';
+  static const serverUrl = 'serverUrl';
+  static const apiVersion = 'apiVersion';
 }
 
 class StorageServiceWidget extends InheritedWidget {

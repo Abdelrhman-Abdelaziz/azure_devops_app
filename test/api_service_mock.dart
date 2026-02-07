@@ -49,6 +49,9 @@ class AzureApiServiceMock implements AzureApiService {
   String get basePath => 'https://dev.azure.com/organization';
 
   @override
+  bool get isOnPrem => false;
+
+  @override
   List<GraphUser> get allUsers => [];
 
   @override
@@ -838,6 +841,12 @@ class AzureApiServiceMock implements AzureApiService {
   Future<ApiResponse<List<UserTenant>>> getDirectories() async {
     return ApiResponse.ok([]);
   }
+
+  @override
+  Future<void> setOnPremConfig({required bool isOnPrem, required String serverUrl, required String apiVersion}) async {}
+
+  @override
+  void loadOnPremConfig() {}
 }
 
 class StorageServiceMock implements StorageService {
@@ -945,6 +954,24 @@ class StorageServiceMock implements StorageService {
 
   @override
   void setTenantChosenProjects(String tenant, Iterable<Project> projects) {}
+
+  @override
+  bool getIsOnPrem() => false;
+
+  @override
+  void setIsOnPrem({required bool isOnPrem}) {}
+
+  @override
+  String getServerUrl() => '';
+
+  @override
+  void setServerUrl(String url) {}
+
+  @override
+  String getApiVersion() => '7.0';
+
+  @override
+  void setApiVersion(String version) {}
 }
 
 class AdsServiceMock implements AdsService {

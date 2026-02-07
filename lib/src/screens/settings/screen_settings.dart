@@ -28,6 +28,22 @@ class _SettingsScreen extends StatelessWidget {
                 const SizedBox(height: 10),
                 Text(ctrl.gitUsername),
                 const SizedBox(height: 10),
+                if (ctrl.isOnPrem) ...[  
+                  Text(
+                    'Server',
+                    style: context.textTheme.titleSmall!.copyWith(color: context.colorScheme.onSecondary),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(ctrl.serverUrl),
+                  const SizedBox(height: 10),
+                  Text(
+                    'Mode',
+                    style: context.textTheme.titleSmall!.copyWith(color: context.colorScheme.onSecondary),
+                  ),
+                  const SizedBox(height: 10),
+                  Text('On-Premises (API ${ctrl.apiVersion})'),
+                  const SizedBox(height: 10),
+                ],
               ],
             ),
           ),
@@ -75,7 +91,7 @@ class _SettingsScreen extends StatelessWidget {
               ],
             ),
           ),
-          if (directories.length > 1) ...[
+          if (directories.length > 1 && !ctrl.isOnPrem) ...[
             const SizedBox(height: 20),
             NavigationButton(
               onTap: ctrl.chooseDirectory,
@@ -97,7 +113,10 @@ class _SettingsScreen extends StatelessWidget {
               children: [
                 Icon(DevOpsIcons.users),
                 const SizedBox(width: 20),
-                Text('Switch account', style: context.textTheme.bodyLarge),
+                Text(
+                  ctrl.isOnPrem ? 'Switch account (not available)' : 'Switch account',
+                  style: context.textTheme.bodyLarge,
+                ),
                 const Spacer(),
                 Icon(Icons.arrow_forward_ios),
               ],

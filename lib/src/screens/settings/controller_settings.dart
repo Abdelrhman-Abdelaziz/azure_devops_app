@@ -8,6 +8,10 @@ class _SettingsController with ShareMixin, AppLogger {
 
   late String gitUsername = api.user!.emailAddress!;
 
+  bool get isOnPrem => api.isOnPrem;
+  String get serverUrl => storage.getServerUrl();
+  String get apiVersion => storage.getApiVersion();
+
   String appVersion = '';
 
   final directories = ValueNotifier<ApiResponse<List<UserTenant>>?>(null);
@@ -97,6 +101,11 @@ class _SettingsController with ShareMixin, AppLogger {
   }
 
   Future<void> chooseAccount() async {
+    if (isOnPrem) {
+      OverlayService.snackbar('Not available for on-premises servers', isError: true);
+      return;
+    }
+
     try {
       // Logout to avoid cached account errors
       await MsalService().logout();
